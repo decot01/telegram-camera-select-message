@@ -1,9 +1,10 @@
-.DS_Store
-node_modules/
+﻿.DS_Store
 .idea/
 .vscode/
-*.xcuserstate
-DerivedData/
+.gradle/
+local.properties
 build/
-.demo-cache/
+out/
+__pycache__/
+*.pyc
 *.log
