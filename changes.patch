@@ -1,8 +1,71 @@
+diff --git a/TMessagesProj/build.gradle b/TMessagesProj/build.gradle
+--- a/TMessagesProj/build.gradle
++++ b/TMessagesProj/build.gradle
+@@ -120,10 +120,14 @@
+     ndkVersion "27.2.12479018"
+ 
+ 
++    if (project.hasProperty('usePrebuiltNative')) {
++        sourceSets.main.jniLibs.srcDir file('../../prebuilt-native')
++    } else {
+     externalNativeBuild {
+         cmake {
+             path 'jni/CMakeLists.txt'
+         }
++    }
+     }
+ 
+     lintOptions {
+@@ -140,6 +144,20 @@
+     }
+ 
+     defaultConfig {
++        def clientApi = new Properties()
++        def clientApiFile = rootProject.file('../api.properties')
++        if (!clientApiFile.exists()) {
++            throw new GradleException('Missing local api.properties next to the build directory')
++        }
++        clientApiFile.withInputStream { clientApi.load(it) }
++        def clientApiId = clientApi.getProperty('api_id', '')
++        def clientApiHash = clientApi.getProperty('api_hash', '')
++        if (!(clientApiId ==~ /[1-9][0-9]*/) || !(clientApiHash ==~ /[a-fA-F0-9]{32}/)) {
++            throw new GradleException('Invalid local Telegram API configuration')
++        }
++        buildConfigField 'int', 'CLIENT_API_ID', clientApiId
++        buildConfigField 'String', 'CLIENT_API_HASH', '"' + clientApiHash + '"'
++        ndk { abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64' }
+         minSdkVersion 23
+         targetSdkVersion 36
+ 
+@@ -164,8 +182,8 @@
+             ndk.debugSymbolLevel = 'FULL'
+             buildConfigField "String", "BUILD_VERSION_STRING", "\"" + APP_VERSION_NAME + "\""
+             buildConfigField "String", "BETA_URL", "\"" + getProps("BETA_PRIVATE_URL") + "\""
+-            buildConfigField "boolean", "DEBUG_VERSION", "true"
+-            buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "true"
++            buildConfigField "boolean", "DEBUG_VERSION", "false"
++            buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "false"
+             buildConfigField "boolean", "BUNDLE", "false"
+             buildConfigField "int", "VERSION_NUM", "0"
+         }
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java b/TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+@@ -26,8 +26,8 @@
+     public static boolean NO_SCOPED_STORAGE = Build.VERSION.SDK_INT <= 29;
+     public static String BUILD_VERSION_STRING = BuildConfig.BUILD_VERSION_STRING;
+ 
+-    public static int APP_ID = 4;
+-    public static String APP_HASH = "014b35b6184100b085b0d0572f9b5103";
++    public static int APP_ID = BuildConfig.CLIENT_API_ID;
++    public static String APP_HASH = BuildConfig.CLIENT_API_HASH;
+ 
+     // SafetyNet key for Google Identity SDK, set it to empty to disable
+     public static String SAFETYNET_KEY = "AIzaSyDqt8P-7F7CPCseMkOiVRgb1LY8RN1bvH8";
 diff --git a/TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java b/TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java
-index 1ed161b..d42fe7e 100644
 --- a/TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java
 +++ b/TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java
-@@ -2369,6 +2369,7 @@ public class ChatActivity extends BaseFragment implements
+@@ -2369,6 +2369,7 @@
              checkInstantCameraView();
              if (instantCameraView != null) {
                  if (state == 0) {
@@ -11,19 +74,19 @@ index 1ed161b..d42fe7e 100644
                      chatListView.stopScroll();
                      chatAdapter.updateRowsSafe();
 diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/ChatActivityEnterView.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/ChatActivityEnterView.java
-index 5ab98fb..92d2d77 100644
 --- a/TMessagesProj/src/main/java/org/telegram/ui/Components/ChatActivityEnterView.java
 +++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/ChatActivityEnterView.java
-@@ -16,6 +16,8 @@ import static org.telegram.messenger.LocaleController.getString;
+@@ -16,6 +16,9 @@
  import static org.telegram.ui.LaunchActivity.getLastFragment;
  
  import android.Manifest;
 +import org.telegram.ui.Components.cameraselect.CameraSelectGesture;
++import org.telegram.ui.Components.cameraselect.CameraSelectPlacement;
 +import org.telegram.ui.Components.cameraselect.CameraSelectRailView;
  import android.animation.Animator;
  import android.animation.AnimatorListenerAdapter;
  import android.animation.AnimatorSet;
-@@ -891,11 +893,152 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -891,10 +894,167 @@
          @Override
          public void run() {
              if (delegate != null) {
@@ -33,7 +96,7 @@ index 5ab98fb..92d2d77 100644
              }
          }
      };
- 
++
 +    private final CameraSelectGesture cameraSelection = new CameraSelectGesture();
 +    private CameraSelectRailView cameraSelectionRail;
 +    private boolean selectedVideoCameraFront = true;
@@ -41,38 +104,9 @@ index 5ab98fb..92d2d77 100644
 +    private boolean cameraSelectionTouchOwned;
 +    private boolean cameraSelectionCapturePending;
 +    private long cameraSelectionDownAt;
++    private float cameraSelectionDownY;
 +
 +    public boolean isSelectedVideoCameraFront() { return selectedVideoCameraFront; }
-+
-+    private final Runnable cameraSelectionFrame = new Runnable() {
-+        @Override public void run() {
-+            if (!cameraSelection.isActive()) return;
-+            long now = android.os.SystemClock.uptimeMillis();
-+            if (cameraSelection.isRailVisible(now)) {
-+                if (!cameraSelectionRailShown) showCameraSelectionRail();
-+                if (cameraSelectionRail != null) {
-+                    cameraSelectionRail.setState(cameraSelection.getCandidate(),
-+                        AndroidUtilities.computePerceivedBrightness(getThemedColor(Theme.key_chat_messagePanelVoiceLockBackground)) < .721f);
-+                }
-+            }
-+            int facing = cameraSelection.tick(now);
-+            if (facing != CameraSelectGesture.NONE) {
-+                selectedVideoCameraFront = facing == CameraSelectGesture.FRONT;
-+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-+                cameraSelectionCapturePending = true;
-+                recordAudioVideoRunnable.run();
-+                if (!recordingAudioVideo) { cancelCameraSelection(); return; }
-+                // Use Telegram's existing locked-recording transition and controls.
-+                cameraSelection.finish();
-+                hideCameraSelectionRail();
-+                sendButtonVisible = true;
-+                startTranslation = lockAnimatedTranslation = 0;
-+                startLockTransition();
-+                return;
-+            }
-+            if (cameraSelection.isActive()) AndroidUtilities.runOnUIThread(this, 16);
-+        }
-+    };
 +
 +    private void beginCameraSelection(MotionEvent event) {
 +        calledRecordRunnable = false;
@@ -81,52 +115,74 @@ index 5ab98fb..92d2d77 100644
 +        cameraSelectionRailShown = false;
 +        cameraSelectionTouchOwned = true;
 +        cameraSelectionDownAt = android.os.SystemClock.uptimeMillis();
++        cameraSelectionDownY = event.getRawY();
 +        float density = getResources().getDisplayMetrics().density;
 +        cameraSelection.begin(event.getRawX() / density, event.getRawY() / density, cameraSelectionDownAt);
 +        audioVideoButtonContainer.getParent().requestDisallowInterceptTouchEvent(true);
-+        AndroidUtilities.runOnUIThread(cameraSelectionFrame);
++        if (cameraSelectionRail == null) {
++            cameraSelectionRail = new CameraSelectRailView(getContext(), resourcesProvider,
++                    parentFragment != null ? parentFragment.getGlassHintFactory() : null);
++        }
++        cameraSelectionRail.prepareForGesture();
++        positionCameraSelectionRail();
++        // Camera2 starts directly; only the legacy recorder needs camera enumeration.
++        if (!InstantCameraViewBase.isCamera2Enabled(currentAccount)
++                && parentActivity != null
++                && parentActivity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
++                && !CameraController.getInstance().isCameraInitied()) {
++            CameraController.getInstance().initCamera(null);
++        }
++    }
++
++    private void positionCameraSelectionRail() {
++        if (sizeNotifierLayout == null || cameraSelectionRail == null) return;
++        int[] anchor = new int[2], host = new int[2], bar = new int[2];
++        audioVideoButtonContainer.getLocationOnScreen(anchor);
++        sizeNotifierLayout.getLocationOnScreen(host);
++        View inputBar = messageEditTextContainer != null ? messageEditTextContainer : textFieldContainer;
++        inputBar.getLocationOnScreen(bar);
++        float density = AndroidUtilities.density;
++        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
++                dp(CameraSelectRailView.WIDTH_DP), dp(CameraSelectRailView.HEIGHT_DP), Gravity.TOP | Gravity.LEFT);
++        params.leftMargin = anchor[0] - host[0] + audioVideoButtonContainer.getWidth() / 2
++                - dp(CameraSelectRailView.CENTER_X_DP);
++        params.topMargin = CameraSelectPlacement.top(density, bar[1] - host[1]);
++        cameraSelection.setBackPull(CameraSelectPlacement.backPull(density, cameraSelectionDownY,
++                host[1] + params.topMargin));
++        cameraSelectionRail.setPlacement(params.leftMargin, params.topMargin);
++        if (cameraSelectionRail.getParent() != sizeNotifierLayout) {
++            if (cameraSelectionRail.getParent() instanceof ViewGroup) {
++                ((ViewGroup) cameraSelectionRail.getParent()).removeView(cameraSelectionRail);
++            }
++            sizeNotifierLayout.addView(cameraSelectionRail, params);
++        } else {
++            FrameLayout.LayoutParams previous = (FrameLayout.LayoutParams) cameraSelectionRail.getLayoutParams();
++            if (previous.leftMargin != params.leftMargin || previous.topMargin != params.topMargin) {
++                cameraSelectionRail.setLayoutParams(params);
++            }
++        }
 +    }
 +
 +    private void showCameraSelectionRail() {
-+        if (sizeNotifierLayout == null) return;
-+        if (cameraSelectionRail == null) {
-+            cameraSelectionRail = new CameraSelectRailView(getContext(), R.drawable.camera_select_main,
-+                R.drawable.camera_select_chevron, R.drawable.camera_select_front);
-+            if (parentFragment != null && parentFragment.getGlassHintFactory() != null) {
-+                BlurredBackgroundColorProviderThemed colors = new BlurredBackgroundColorProviderThemed(
-+                    resourcesProvider, Theme.key_chat_messagePanelVoiceLockBackground);
-+                BlurredBackgroundDrawable mainGlass = parentFragment.getGlassHintFactory().create(cameraSelectionRail, colors);
-+                BlurredBackgroundDrawable frontGlass = parentFragment.getGlassHintFactory().create(cameraSelectionRail, colors);
-+                mainGlass.setRadius(dp(21));
-+                frontGlass.setRadius(dp(21));
-+                mainGlass.setHasPadding(false);
-+                frontGlass.setHasPadding(false);
-+                cameraSelectionRail.setGlassBackgrounds(mainGlass, frontGlass);
-+            }
-+        }
-+        int[] anchor = new int[2], host = new int[2];
-+        audioVideoButtonContainer.getLocationOnScreen(anchor);
-+        sizeNotifierLayout.getLocationOnScreen(host);
-+        // Match Figma's rail relative to the center of the record button.
-+        int left = anchor[0] - host[0] + audioVideoButtonContainer.getWidth() / 2 - dp(49);
-+        int top = anchor[1] - host[1] + audioVideoButtonContainer.getHeight() / 2 - dp(329.5f);
-+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(98), dp(255), Gravity.TOP | Gravity.LEFT);
-+        params.leftMargin = left;
-+        params.topMargin = top;
-+        sizeNotifierLayout.addView(cameraSelectionRail, params);
++        if (sizeNotifierLayout == null || cameraSelectionRail == null) return;
++        // Measure only while selecting. The native bar is free to transform once recording starts.
++        positionCameraSelectionRail();
++        cameraSelectionRail.bringToFront();
++        cameraSelectionRail.setState(cameraSelection.getCandidate(), cameraSelection.getPull());
++        cameraSelectionRail.show();
 +        cameraSelectionRailShown = true;
 +    }
 +
 +    private void hideCameraSelectionRail() {
-+        AndroidUtilities.cancelRunOnUIThread(cameraSelectionFrame);
-+        if (cameraSelectionRail != null && sizeNotifierLayout != null) {
-+            sizeNotifierLayout.removeView(cameraSelectionRail);
-+        }
++        if (cameraSelectionRail != null && cameraSelectionRailShown) cameraSelectionRail.hide();
 +        cameraSelectionRailShown = false;
 +    }
 +
 +    private void cancelCameraSelection() {
-+        if (!cameraSelection.isActive() && !cameraSelectionCapturePending) { hideCameraSelectionRail(); return; }
++        if (!cameraSelection.isActive() && !cameraSelectionCapturePending) {
++            hideCameraSelectionRail();
++            return;
++        }
 +        boolean wasRecording = cameraSelection.isRecording() || cameraSelectionCapturePending;
 +        cameraSelectionCapturePending = false;
 +        cameraSelection.cancel();
@@ -152,15 +208,29 @@ index 5ab98fb..92d2d77 100644
 +            cancelCameraSelection();
 +            return true;
 +        }
++        int previous = cameraSelection.getCandidate();
 +        float density = getResources().getDisplayMetrics().density;
 +        cameraSelection.move(event.getRawX() / density, event.getRawY() / density, android.os.SystemClock.uptimeMillis());
 +        if (cameraSelection.isCancelled()) { cancelCameraSelection(); return true; }
 +        if (action == MotionEvent.ACTION_UP) {
 +            cameraSelectionTouchOwned = false;
-+            boolean tap = android.os.SystemClock.uptimeMillis() - cameraSelectionDownAt < CameraSelectGesture.HOLD_MS;
-+            cameraSelection.finish();
++            boolean tap = !cameraSelection.hasDragged()
++                    && android.os.SystemClock.uptimeMillis() - cameraSelectionDownAt < 150;
++            int facing = cameraSelection.finish();
 +            hideCameraSelectionRail();
-+            if (tap && delegate != null) {
++            if (facing != CameraSelectGesture.NONE) {
++                selectedVideoCameraFront = facing == CameraSelectGesture.FRONT;
++                cameraSelectionCapturePending = true;
++                recordAudioVideoRunnable.run();
++                if (!recordingAudioVideo) {
++                    cameraSelectionCapturePending = false;
++                    CameraController.getInstance().cancelOnInitRunnable(onFinishInitCameraRunnable);
++                    return true;
++                }
++                sendButtonVisible = true;
++                startTranslation = lockAnimatedTranslation = 0;
++                startLockTransition();
++            } else if (tap && delegate != null) {
 +                if (sendVoiceEnabled && sendRoundEnabled) {
 +                    delegate.onSwitchRecordMode(false);
 +                    setRecordVideoButtonVisible(false, true);
@@ -170,13 +240,30 @@ index 5ab98fb..92d2d77 100644
 +            }
 +            return true;
 +        }
-+        return !cameraSelection.isRecording();
++        if (cameraSelection.isRailVisible()) {
++            if (!cameraSelectionRailShown) showCameraSelectionRail();
++        }
++        if (cameraSelectionRailShown && cameraSelectionRail != null) {
++            cameraSelectionRail.setState(cameraSelection.getCandidate(), cameraSelection.getPull());
++        }
++        if (cameraSelection.getCandidate() != previous && cameraSelection.getCandidate() != CameraSelectGesture.NONE) {
++            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++        }
++        return true;
 +    }
-+
+ 
      private boolean recordAudioVideoRunnableStarted;
      private boolean calledRecordRunnable;
-     private Runnable recordAudioVideoRunnable = new Runnable() {
-@@ -1442,6 +1585,7 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -931,7 +1091,7 @@
+                         return;
+                     }
+                 }
+-                if (!CameraController.getInstance().isCameraInitied()) {
++                if (!InstantCameraViewBase.isCamera2Enabled(currentAccount) && !CameraController.getInstance().isCameraInitied()) {
+                     CameraController.getInstance().initCamera(onFinishInitCameraRunnable);
+                 } else {
+                     onFinishInitCameraRunnable.run();
+@@ -1442,6 +1602,7 @@
                  snapAnimationProgress = 0;
              }
  
@@ -184,7 +271,7 @@ index 5ab98fb..92d2d77 100644
              if ((showTooltip && System.currentTimeMillis() - showTooltipStartTime > 200) || tooltipAlpha != 0f) {
                  if (moveProgress < 0.8f || sendButtonVisible || exitTransition != 0 || transformToSeekbar != 0) {
                      showTooltip = false;
-@@ -1567,7 +1711,7 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -1567,7 +1728,7 @@
              if (dy > maxTranslationDy) {
                  dy = maxTranslationDy;
              }
@@ -193,7 +280,7 @@ index 5ab98fb..92d2d77 100644
              canvas.scale(s, s, cx, lockMiddleY + dy);
  
              rectF.set(cx - dpf2(18), lockY + dy, cx + dpf2(18), lockY + dy + lockSize);
-@@ -3051,6 +3195,7 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -3051,6 +3212,7 @@
              public boolean onTouchEvent(MotionEvent motionEvent) {
                  if (isLiveComment) return false;
                  createRecordCircle();
@@ -201,7 +288,7 @@ index 5ab98fb..92d2d77 100644
                  if (motionEvent.getAction() == MotionEvent.ACTION_DOWN) {
                      if (recordCircle.isSendButtonVisible()) {
                          if (!hasRecordVideo || calledRecordRunnable) {
-@@ -3114,6 +3259,10 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -3114,6 +3276,10 @@
                          return true;
                      }
  
@@ -212,7 +299,7 @@ index 5ab98fb..92d2d77 100644
                      if (hasRecordVideo) {
                          calledRecordRunnable = false;
                          recordAudioVideoRunnableStarted = true;
-@@ -3229,7 +3378,7 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -3229,7 +3395,7 @@
                      if (recordCircle.isSendButtonVisible()) {
                          return false;
                      }
@@ -221,15 +308,22 @@ index 5ab98fb..92d2d77 100644
                          startLockTransition();
                          return false;
                      } else {
-@@ -6585,6 +6734,7 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -6585,6 +6751,14 @@
      }
  
      public void onDestroy() {
 +        cancelCameraSelection();
++        if (cameraSelectionRail != null) {
++            cameraSelectionRail.dispose();
++            if (cameraSelectionRail.getParent() instanceof ViewGroup) {
++                ((ViewGroup) cameraSelectionRail.getParent()).removeView(cameraSelectionRail);
++            }
++            cameraSelectionRail = null;
++        }
          if (audioTimelineView != null) {
              audioTimelineView.destroy();
          }
-@@ -6711,6 +6861,7 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -6711,6 +6885,7 @@
      private Runnable hideKeyboardRunnable;
  
      public void onPause() {
@@ -237,7 +331,7 @@ index 5ab98fb..92d2d77 100644
          isPaused = true;
          if (senderSelectPopupWindow != null) {
              senderSelectPopupWindow.setPauseNotifications(false);
-@@ -8928,6 +9079,10 @@ public class ChatActivityEnterView extends FrameLayout implements
+@@ -8928,6 +9103,10 @@
  
      private int lastRecordState;
      protected void updateRecordInterface(int recordState, boolean animated) {
@@ -248,24 +342,37 @@ index 5ab98fb..92d2d77 100644
          if (moveToSendStateRunnable != null) {
              AndroidUtilities.cancelRunOnUIThread(moveToSendStateRunnable);
              moveToSendStateRunnable = null;
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraViewBase.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraViewBase.java
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraViewBase.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraViewBase.java
+@@ -120,6 +120,9 @@
+     /** Returns whether recording is paused or changing pause state. */
+     public abstract boolean isPaused();
+ 
++    /** Chooses the camera before the next recording session is opened. */
++    public abstract void setInitialCameraFacing(boolean front);
++
+     /** Opens the camera UI and starts the selected implementation. */
+     public abstract void showCamera(boolean fromPaused);
+ 
 diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView.java
-index 6b57a2a..26f98c8 100644
 --- a/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView.java
 +++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView.java
-@@ -145,6 +145,12 @@ public class InstantCameraView extends InstantCameraViewBase implements Notifica
+@@ -145,6 +145,13 @@
      private float progress;
      private CameraInfo selectedCamera;
      private boolean isFrontface = true;
 +    private boolean initialCameraFront = true;
 +
 +    /** Applied before either Camera or Camera2 opens its initial recording session. */
++    @Override
 +    public void setInitialCameraFacing(boolean front) {
 +        initialCameraFront = front;
 +    }
      private volatile boolean cameraReady;
      private AnimatorSet muteAnimation;
      private TLRPC.InputFile file;
-@@ -736,9 +742,7 @@ public class InstantCameraView extends InstantCameraViewBase implements Notifica
+@@ -736,9 +743,7 @@
          cameraReady = false;
          selectedCamera = null;
          if (!fromPaused) {
@@ -276,206 +383,423 @@ index 6b57a2a..26f98c8 100644
              updateFlash();
              recordedTime = 0;
              progress = 0;
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView2.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView2.java
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView2.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/InstantCameraView2.java
+@@ -90,6 +90,7 @@
+     private final int buttonIconSize;
+ 
+     private RoundVideoSession session;
++    private RoundVideoSession.CameraFacing initialCameraFacing;
+     private RoundVideoSession.OutputResolution activeOutputResolution;
+     private RoundVideoSession.StateInfo stateInfo;
+     private RoundVideoSession.CameraCapabilities capabilities;
+@@ -367,6 +368,11 @@
+     }
+ 
+     @Override
++    public void setInitialCameraFacing(boolean front) {
++        initialCameraFacing = front ? RoundVideoSession.CameraFacing.FRONT : RoundVideoSession.CameraFacing.BACK;
++    }
++
++    @Override
+     public void showCamera(boolean fromPaused) {
+         if (session != null) return;
+         setVisibilityFromPause = fromPaused;
+@@ -385,7 +391,8 @@
+         activeOutputResolution = SharedSettings.roundVideoOutputResolution.get();
+         session = new RoundVideoSession.Builder(getContext(), textureView)
+                 .setOutputDirectory(new File(ApplicationLoader.getFilesDirFixed(), "cache"))
+-                .setInitialFacing(SharedSettings.roundVideoLastCamera.get())
++                .setInitialFacing(initialCameraFacing != null
++                        ? initialCameraFacing : SharedSettings.roundVideoLastCamera.get())
+                 .setOutputResolution(activeOutputResolution)
+                 .setVideoBitrate(SharedSettings.roundVideoVideoBitrate.get())
+                 .setCameraResolution(SharedSettings.roundVideoCameraResolution.get())
 diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectGesture.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectGesture.java
 new file mode 100644
-index 0000000..8f3e8a1
 --- /dev/null
 +++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectGesture.java
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,61 @@
 +package org.telegram.ui.Components.cameraselect;
 +
-+/** UI-independent state machine. Coordinates are dp; time is monotonic milliseconds. */
++/** Event-driven camera selection. Coordinates are dp; recording starts only on release. */
 +public final class CameraSelectGesture {
 +    public static final int NONE = 0, FRONT = 1, BACK = 2;
-+    public static final long HOLD_MS = 150, SETTLE_MS = 180;
-+    public static final float FRONT_PULL = 95f, BACK_PULL = 237f, CANCEL_PULL = 72f;
-+    private boolean active, recording, cancelled;
-+    private int candidate, selected;
-+    private float originX, originY, stableX, stableY;
-+    private long downAt, stableAt;
++    public static final float FRONT_PULL = 24f, BACK_PULL = 206.625f, CANCEL_PULL = 72f;
++    private boolean active, recording, cancelled, dragged;
++    private int candidate;
++    private float backPull = BACK_PULL;
++    private float originX, originY, pull;
 +
 +    public void begin(float x, float y, long now) {
 +        active = true;
-+        recording = cancelled = false;
-+        candidate = selected = NONE;
-+        originX = stableX = x;
-+        originY = stableY = y;
-+        downAt = stableAt = now;
++        recording = cancelled = dragged = false;
++        candidate = NONE;
++        originX = x;
++        originY = y;
++        pull = 0f;
++        backPull = BACK_PULL;
++    }
++
++    public void setBackPull(float distance) {
++        backPull = Math.max(FRONT_PULL + 16f, distance);
 +    }
 +
 +    public void move(float x, float y, long now) {
-+        if (!active) return;
-+        if (x - originX <= -CANCEL_PULL) {
++        if (!active || cancelled) return;
++        float dx = x - originX;
++        pull = Math.max(0f, originY - y);
++        dragged |= Math.abs(dx) > 8f || Math.abs(originY - y) > 8f;
++        if (dx <= -CANCEL_PULL) {
 +            cancelled = true;
 +            candidate = NONE;
 +            return;
 +        }
-+        if (recording || cancelled) return;
-+        float pull = originY - y;
-+        int next = Math.abs(x - originX) > 48 ? NONE : pull >= BACK_PULL ? BACK : pull >= FRONT_PULL ? FRONT : NONE;
-+        // Require a pause on a target, rather than starting the front camera in transit.
-+        if (next != candidate || Math.hypot(x - stableX, y - stableY) > 6) {
-+            stableAt = now;
-+            stableX = x;
-+            stableY = y;
-+        }
-+        candidate = next;
++        candidate = Math.abs(dx) > 64f ? NONE
++                : pull >= backPull ? BACK : pull >= FRONT_PULL ? FRONT : NONE;
 +    }
 +
-+    /** Returns the camera once, when the target has settled. */
-+    public int tick(long now) {
-+        if (!active || recording || cancelled || candidate == NONE || now - downAt < HOLD_MS || now - stableAt < SETTLE_MS) return NONE;
-+        recording = true;
-+        selected = candidate;
-+        return selected;
-+    }
-+
-+    public boolean isRailVisible(long now) { return active && !cancelled && now - downAt >= HOLD_MS; }
++    public boolean isRailVisible() { return active && !cancelled && pull > 8f; }
 +    public boolean isActive() { return active; }
 +    public boolean isRecording() { return recording; }
 +    public boolean isCancelled() { return cancelled; }
-+    public int getCandidate() { return recording ? selected : candidate; }
++    public boolean hasDragged() { return dragged; }
++    public float getPull() { return pull; }
++    public int getCandidate() { return candidate; }
++
++    /** Commit exactly once. Returning to the button before release cancels selection. */
 +    public int finish() {
-+        int result = active && recording && !cancelled ? selected : NONE;
++        int result = active && !cancelled ? candidate : NONE;
 +        active = false;
++        recording = result != NONE;
 +        return result;
 +    }
-+    public void cancel() { cancelled = true; active = false; }
++
++    public void cancel() {
++        cancelled = true;
++        active = recording = false;
++        candidate = NONE;
++    }
++}
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectPlacement.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectPlacement.java
+new file mode 100644
+--- /dev/null
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectPlacement.java
+@@ -0,0 +1,24 @@
++package org.telegram.ui.Components.cameraselect;
++
++/** Pixel placement separated from Android so density and bar movement can be regression tested. */
++public final class CameraSelectPlacement {
++    public static final int BAR_GAP_PX = 80;
++    public static final float FRONT_BOTTOM_DP = 246.5f;
++    public static final float TARGET_MIDPOINT_DP = (68.25f + 225.5f) / 2f;
++
++    private CameraSelectPlacement() {}
++
++    public static int top(float density, int barTopPx) {
++        return barTopPx - BAR_GAP_PX - (int) Math.ceil(FRONT_BOTTOM_DP * density);
++    }
++
++    /** Chat's custom parent may add its action bar/insets after applying layout margins. */
++    public static int translation(int desired, int laidOut) {
++        return desired - laidOut;
++    }
++
++    public static float backPull(float density, float touchDownY, int railTopScreenPx) {
++        float midpoint = railTopScreenPx + TARGET_MIDPOINT_DP * density;
++        return Math.max(CameraSelectGesture.FRONT_PULL + 16f, (touchDownY - midpoint) / density);
++    }
 +}
 diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectRailView.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectRailView.java
 new file mode 100644
-index 0000000..ca58f64
 --- /dev/null
 +++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/CameraSelectRailView.java
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,263 @@
 +package org.telegram.ui.Components.cameraselect;
 +
 +import android.content.Context;
-+import android.content.res.ColorStateList;
++
++
 +import android.graphics.Canvas;
-+import android.graphics.Color;
-+import android.graphics.LinearGradient;
++import android.graphics.PorterDuff;
++import android.graphics.PorterDuffColorFilter;
 +import android.graphics.Paint;
 +import android.graphics.RectF;
-+import android.graphics.Shader;
 +import android.graphics.drawable.Drawable;
 +import android.view.View;
 +
-+/** Figma 5:449: 42 x 72.5 pill, 42 circle at y=172.5. No bitmap UI. */
-+public final class CameraSelectRailView extends View {
-+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-+    private final RectF rect = new RectF();
-+    private final Drawable main, chevron, front;
-+    private final float density;
-+    private int candidate;
-+    private boolean dark;
-+    private Drawable mainGlass, frontGlass;
++import androidx.core.graphics.ColorUtils;
++import androidx.dynamicanimation.animation.FloatPropertyCompat;
++import androidx.dynamicanimation.animation.SpringAnimation;
++import androidx.dynamicanimation.animation.SpringForce;
 +
-+    public CameraSelectRailView(Context context, int mainId, int chevronId, int frontId) {
++import org.telegram.messenger.R;
++import org.telegram.messenger.AndroidUtilities;
++import org.telegram.ui.Components.blur3.BlurredBackgroundDrawableViewFactory;
++import org.telegram.ui.Components.blur3.drawable.BlurredBackgroundDrawable;
++import org.telegram.ui.Components.blur3.drawable.color.BlurredBackgroundColorProviderThemed;
++import org.telegram.ui.ActionBar.Theme;
++
++/** Original Figma shapes on the same glass engine and palette as native Telegram recording controls. */
++public final class CameraSelectRailView extends View {
++    public static final int WIDTH_DP = 122, HEIGHT_DP = 295;
++    public static final float CENTER_X_DP = 61f, FRONT_CENTER_Y_DP = 225.5f;
++    public static final float FRONT_BOTTOM_DP = 246.5f;
++    private final Paint fallbackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF bounds = new RectF();
++    private final BlurredBackgroundDrawable mainGlass, frontGlass;
++    private final BlurredBackgroundColorProviderThemed glassColors;
++    private final Drawable fallbackShadow;
++    private final Drawable camera, chevron, front;
++    private final Theme.ResourcesProvider resourcesProvider;
++    private final SpringAnimation revealSpring, mainSpring, frontSpring;
++    private int candidate, foregroundColor, accentColor, backgroundColor;
++    private float reveal, mainSelected, frontSelected;
++    private boolean shown;
++    private int desiredLeft, desiredTop;
++    private boolean hasPlacement;
++
++    private static final FloatPropertyCompat<CameraSelectRailView> REVEAL =
++            new FloatPropertyCompat<CameraSelectRailView>("cameraSelectReveal") {
++                @Override public float getValue(CameraSelectRailView view) { return view.reveal; }
++                @Override public void setValue(CameraSelectRailView view, float value) {
++                    view.reveal = value;
++                    view.invalidate();
++                }
++            };
++    private static final FloatPropertyCompat<CameraSelectRailView> MAIN =
++            new FloatPropertyCompat<CameraSelectRailView>("cameraSelectMain") {
++                @Override public float getValue(CameraSelectRailView view) { return view.mainSelected; }
++                @Override public void setValue(CameraSelectRailView view, float value) {
++                    view.mainSelected = value;
++                    view.updateIconColors();
++                    view.invalidate();
++                }
++            };
++    private static final FloatPropertyCompat<CameraSelectRailView> FRONT =
++            new FloatPropertyCompat<CameraSelectRailView>("cameraSelectFront") {
++                @Override public float getValue(CameraSelectRailView view) { return view.frontSelected; }
++                @Override public void setValue(CameraSelectRailView view, float value) {
++                    view.frontSelected = value;
++                    view.updateIconColors();
++                    view.invalidate();
++                }
++            };
++
++    public CameraSelectRailView(Context context, Theme.ResourcesProvider resourcesProvider,
++                                BlurredBackgroundDrawableViewFactory factory) {
 +        super(context);
-+        density = getResources().getDisplayMetrics().density;
-+        main = context.getDrawable(mainId).mutate();
-+        chevron = context.getDrawable(chevronId).mutate();
-+        front = context.getDrawable(frontId).mutate();
-+        setLayerType(View.LAYER_TYPE_SOFTWARE, null);
++        this.resourcesProvider = resourcesProvider;
++        fallbackShadow = context.getDrawable(R.drawable.lock_round_shadow).mutate();
++        glassColors = new BlurredBackgroundColorProviderThemed(resourcesProvider,
++                Theme.key_chat_messagePanelVoiceLockBackground);
++        if (factory != null) {
++            mainGlass = factory.create(this, glassColors);
++            frontGlass = factory.create(this, glassColors);
++            configureGlass(mainGlass, 40, 32, 82, 104.5f);
++            configureGlass(frontGlass, 40, 204.5f, 82, FRONT_BOTTOM_DP);
++        } else {
++            mainGlass = frontGlass = null;
++        }
++        camera = context.getDrawable(R.drawable.camera_select_main).mutate();
++        chevron = context.getDrawable(R.drawable.camera_select_chevron).mutate();
++        front = context.getDrawable(R.drawable.camera_select_front).mutate();
++        revealSpring = spring(REVEAL, 1000f);
++        mainSpring = spring(MAIN, 1500f);
++        frontSpring = spring(FRONT, 1500f);
++        revealSpring.addEndListener((animation, canceled, value, velocity) -> {
++            if (!canceled && !shown) setVisibility(INVISIBLE);
++        });
++        setVisibility(INVISIBLE);
 +        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
 +        setClickable(false);
++        updateColors();
 +    }
 +
-+    public void setState(int candidate, boolean dark) {
-+        if (this.candidate == candidate && this.dark == dark) return;
-+        this.candidate = candidate;
-+        this.dark = dark;
-+        invalidate();
++    private SpringAnimation spring(FloatPropertyCompat<CameraSelectRailView> property, float stiffness) {
++        SpringAnimation animation = new SpringAnimation(this, property);
++        animation.setSpring(new SpringForce(0f).setStiffness(stiffness)
++                .setDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY));
++        animation.setMinimumVisibleChange(.002f);
++        return animation;
 +    }
 +
-+    /** The host supplies its own live glass so blur, tint and low-power fallbacks match the chat. */
-+    public void setGlassBackgrounds(Drawable mainGlass, Drawable frontGlass) {
-+        this.mainGlass = mainGlass;
-+        this.frontGlass = frontGlass;
-+        mainGlass.setCallback(this);
-+        frontGlass.setCallback(this);
-+        setLayerType(View.LAYER_TYPE_NONE, null);
-+        invalidate();
++    public void prepareForGesture() {
++        mainSpring.cancel();
++        frontSpring.cancel();
++        candidate = CameraSelectGesture.NONE;
++        mainSelected = frontSelected = 0f;
++        updateIconColors();
++    }
++
++    public void setPlacement(int left, int top) {
++        desiredLeft = left;
++        desiredTop = top;
++        hasPlacement = true;
++        applyPlacement();
++    }
++
++    private void applyPlacement() {
++        if (!hasPlacement) return;
++        setTranslationX(CameraSelectPlacement.translation(desiredLeft, getLeft()));
++        setTranslationY(CameraSelectPlacement.translation(desiredTop, getTop()));
++    }
++
++    @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
++        super.onLayout(changed, left, top, right, bottom);
++        applyPlacement();
++    }
++
++    public void show() {
++        shown = true;
++        updateColors();
++        if (getVisibility() != VISIBLE) {
++            reveal = 0f;
++            setVisibility(VISIBLE);
++        }
++        revealSpring.animateToFinalPosition(1f);
++    }
++
++    public void hide() {
++        shown = false;
++        revealSpring.animateToFinalPosition(0f);
++    }
++
++    private void configureGlass(BlurredBackgroundDrawable glass, float left, float top, float right, float bottom) {
++        glass.setRadius(AndroidUtilities.dp(21));
++        int padding = AndroidUtilities.dp(3);
++        glass.setPadding(padding);
++        glass.setBounds(AndroidUtilities.dp(left) - padding, AndroidUtilities.dp(top) - padding,
++                AndroidUtilities.dp(right) + padding, AndroidUtilities.dp(bottom) + padding);
++        glass.setReservedBounds(AndroidUtilities.dp(left - 5), AndroidUtilities.dp(top - 5),
++                AndroidUtilities.dp(right + 5), AndroidUtilities.dp(bottom + 5));
++        glass.setCallback(this);
 +    }
 +
 +    @Override protected boolean verifyDrawable(Drawable drawable) {
 +        return drawable == mainGlass || drawable == frontGlass || super.verifyDrawable(drawable);
 +    }
 +
++    public void updateColors() {
++        backgroundColor = Theme.getColor(Theme.key_chat_messagePanelVoiceLockBackground, resourcesProvider);
++        foregroundColor = Theme.getColor(mainGlass != null
++                ? Theme.key_glass_defaultIcon : Theme.key_chat_messagePanelVoiceLock, resourcesProvider);
++        accentColor = Theme.getColor(Theme.key_chat_recordVoiceCancel, resourcesProvider);
++        fallbackPaint.setColor(backgroundColor);
++        fallbackShadow.setColorFilter(new PorterDuffColorFilter(
++                Theme.getColor(Theme.key_chat_messagePanelVoiceLockShadow, resourcesProvider), PorterDuff.Mode.MULTIPLY));
++        glassColors.updateColors();
++        if (mainGlass != null) mainGlass.updateColors();
++        if (frontGlass != null) frontGlass.updateColors();
++        updateIconColors();
++        invalidate();
++    }
++
++    public void dispose() {
++        revealSpring.cancel();
++        mainSpring.cancel();
++        frontSpring.cancel();
++        if (mainGlass != null) mainGlass.setCallback(null);
++        if (frontGlass != null) frontGlass.setCallback(null);
++    }
++
++    private void updateIconColors() {
++        int mainColor = ColorUtils.blendARGB(foregroundColor, accentColor, clamp(mainSelected));
++        camera.setTint(mainColor);
++        chevron.setTint(mainColor);
++        front.setTint(ColorUtils.blendARGB(foregroundColor, accentColor, clamp(frontSelected)));
++    }
++
++    public void setState(int candidate, float pull) {
++        if (this.candidate == candidate) return;
++        this.candidate = candidate;
++        mainSpring.animateToFinalPosition(candidate == CameraSelectGesture.BACK ? 1f : 0f);
++        frontSpring.animateToFinalPosition(candidate == CameraSelectGesture.FRONT ? 1f : 0f);
++    }
++
++    @Override protected void onDetachedFromWindow() {
++        revealSpring.cancel();
++        mainSpring.cancel();
++        frontSpring.cancel();
++        super.onDetachedFromWindow();
++    }
++
 +    @Override protected void onDraw(Canvas canvas) {
-+        drawGlass(canvas, mainGlass, 28, 20, 42, 72.5f);
-+        drawGlass(canvas, frontGlass, 28, 192.5f, 42, 42);
++        float appearance = clamp(reveal);
++        float near = clamp(appearance * 1.12f);
++        float far = clamp((appearance - .10f) / .90f);
++        drawTarget(canvas, mainGlass, 32, 104.5f, 68.25f, far, mainSelected, true);
++        drawTarget(canvas, frontGlass, 204.5f, FRONT_BOTTOM_DP, FRONT_CENTER_Y_DP, near, frontSelected, false);
++    }
++
++    private void drawTarget(Canvas canvas, BlurredBackgroundDrawable glass, float top, float bottom,
++                            float cy, float appearance, float selected, boolean main) {
++        if (appearance <= 0f) return;
++        int alpha = Math.round(255 * appearance);
++        float scale = .90f + .10f * appearance + .045f * clamp(selected);
 +        canvas.save();
-+        canvas.scale(density, density);
-+        shell(canvas, 28, 20, 42, 72.5f, candidate == CameraSelectGesture.BACK);
-+        shell(canvas, 28, 192.5f, 42, 42, candidate == CameraSelectGesture.FRONT);
-+        int ink = dark ? Color.WHITE : Color.BLACK;
-+        icon(canvas, main, 38, 38.25f, 22, 16, ink);
-+        icon(canvas, chevron, 40, 66.25f, 18, 8, ink);
-+        icon(canvas, front, 39, 202.5f, 20, 22, ink);
++        canvas.translate(0, AndroidUtilities.dpf2((1f - appearance) * (main ? 12f : 8f)
++                - (main ? 1.5f * clamp(selected) : 0f)));
++        // Keep the near circle's resting bottom anchored to the 80px gap when selected.
++        canvas.scale(scale, scale, AndroidUtilities.dpf2(CENTER_X_DP),
++                main ? AndroidUtilities.dpf2(cy) : AndroidUtilities.dp(FRONT_BOTTOM_DP));
++        if (glass != null) {
++            glass.setAlpha(alpha);
++            glass.draw(canvas);
++        } else {
++            fallbackShadow.setAlpha(alpha);
++            fallbackShadow.setBounds(AndroidUtilities.dp(37), AndroidUtilities.dp(top - 3),
++                    AndroidUtilities.dp(85), AndroidUtilities.dp(bottom + 3));
++            fallbackShadow.draw(canvas);
++            fallbackPaint.setAlpha(Math.round(android.graphics.Color.alpha(backgroundColor) * appearance));
++            bounds.set(AndroidUtilities.dp(40), AndroidUtilities.dp(top),
++                    AndroidUtilities.dp(82), AndroidUtilities.dp(bottom));
++            canvas.drawRoundRect(bounds, AndroidUtilities.dp(21), AndroidUtilities.dp(21), fallbackPaint);
++        }
++        if (main) {
++            icon(canvas, camera, 50, 50.25f, 22, 16, alpha);
++            icon(canvas, chevron, 52, 78.25f, 18, 8, alpha);
++        } else {
++            icon(canvas, front, 51, 214.5f, 20, 22, alpha);
++        }
 +        canvas.restore();
 +    }
 +
-+    private void drawGlass(Canvas canvas, Drawable glass, float x, float y, float w, float h) {
-+        if (glass == null) return;
-+        glass.setBounds(Math.round(x*density), Math.round(y*density), Math.round((x+w)*density), Math.round((y+h)*density));
-+        glass.draw(canvas);
-+    }
++    private static float clamp(float value) { return Math.max(0f, Math.min(1f, value)); }
 +
-+    private void shell(Canvas canvas, float x, float y, float w, float h, boolean active) {
-+        rect.set(x, y, x + w, y + h);
-+        paint.setStyle(Paint.Style.FILL);
-+        if (mainGlass == null) {
-+            paint.setColor(dark ? 0xE5333C48 : 0xF2F3F5F7);
-+            paint.setShadowLayer(12, 0, 4, 0x22000000);
-+            canvas.drawRoundRect(rect, 21, 21, paint);
-+            paint.clearShadowLayer();
-+            paint.setShader(new LinearGradient(x, y, x+w, y+h, dark ? 0x558FA9C7 : 0xBFFFFFFF, dark ? 0x00333C48 : 0x22FFFFFF, Shader.TileMode.CLAMP));
-+            canvas.drawRoundRect(rect, 21, 21, paint);
-+            paint.setShader(null);
-+        }
-+        paint.setStyle(Paint.Style.STROKE);
-+        paint.setStrokeWidth(active ? 2f : .5f);
-+        paint.setColor(active ? 0xFF008BFF : dark ? 0x55FFFFFF : 0xCCFFFFFF);
-+        rect.inset(.5f, .5f);
-+        canvas.drawRoundRect(rect, 21, 21, paint);
-+        paint.setStyle(Paint.Style.FILL);
-+    }
-+
-+    private void icon(Canvas canvas, Drawable icon, float x, float y, int w, int h, int color) {
++    private void icon(Canvas canvas, Drawable drawable, float x, float y, int w, int h, int alpha) {
 +        canvas.save();
-+        canvas.translate(x, y);
-+        icon.setTintList(ColorStateList.valueOf(color));
-+        icon.setBounds(0, 0, w, h);
-+        icon.draw(canvas);
++        canvas.translate(AndroidUtilities.dpf2(x), AndroidUtilities.dpf2(y));
++        float density = getResources().getDisplayMetrics().density;
++        canvas.scale(density, density);
++        drawable.setAlpha(alpha);
++        drawable.setBounds(0, 0, w, h);
++        drawable.draw(canvas);
 +        canvas.restore();
 +    }
 +}
-diff --git a/TMessagesProj/src/main/res/drawable/camera_select_chevron.xml b/TMessagesProj/src/main/res/drawable/camera_select_chevron.xml
+diff --git a/TMessagesProj/src/main/res/drawable/camera_select_main.xml b/TMessagesProj/src/main/res/drawable/camera_select_main.xml
 new file mode 100644
-index 0000000..cdcc013
 --- /dev/null
-+++ b/TMessagesProj/src/main/res/drawable/camera_select_chevron.xml
++++ b/TMessagesProj/src/main/res/drawable/camera_select_main.xml
 @@ -0,0 +1,3 @@
-+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="18dp" android:height="8dp" android:viewportWidth="18" android:viewportHeight="8">
-+    <path android:fillColor="#FF000000" android:fillType="evenOdd" android:pathData="M 8.275541497433489 0.23947694115271884 C 8.675648831699363 -0.07982565547984571 9.324352161382937 -0.07982565547984571 9.72445949564881 0.23947694115271884 L 17.699920321696872 6.604226297198605 C 18.100028245605362 6.923528615676169 18.100028245605362 7.441220588648808 17.699920321696872 7.760522907126372 C 17.299812397788383 8.079825680766664 16.651109254307745 8.079825680766664 16.251001330399255 7.760522907126372 L 9 1.9739224123543708 L 1.7489989178713214 7.760522907126372 C 1.348891211199585 8.079825680766664 0.7001885021924499 8.079825680766664 0.3000807955207133 7.760522907126372 C -0.10002691115102325 7.441220588648808 -0.10002691115102325 6.923528615676169 0.3000807955207133 6.604226297198605 L 8.275541497433489 0.23947694115271884 Z" />
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="22dp" android:height="16dp" android:viewportWidth="22" android:viewportHeight="16">
++    <path android:fillColor="#FF000000" android:fillType="nonZero" android:pathData="M 12.324977233937345 0 C 13.369844097935264 0.018756126259298556 13.930071350861947 0.15005871579866825 14.51252949691696 0.4783113401314495 C 15.09054016173674 0.8018749803355585 15.548505120186032 1.2848761019063635 15.855294794924424 1.8944886880320169 C 16.166531020462642 2.508791546249754 16.29102886024539 3.099648809176629 16.30881134170308 4.201641834425434 L 16.30881134170308 4.684641361374872 L 19.17663656397987 1.7819447278475045 C 19.843572662183774 1.1113712388325139 20.897331697345944 1.1301282793158411 21.53759035162169 1.8335275398163153 C 21.795473550174407 2.1195764857378596 21.955538213743345 2.4900343831032448 21.991106898400346 2.8792493209519567 L 22 3.0527539386994427 L 22 12.947245079995099 C 22 13.922625414057237 21.25303157001163 14.710435097959735 20.33265975449024 14.710435097959735 C 19.95472991913163 14.710435097959735 19.594582565230713 14.574443825199811 19.301132542891803 14.330599232337006 L 19.17663656397987 14.218055272152494 L 16.30881134170308 11.31535765731967 L 16.30881134170308 11.50762091017185 C 16.30881134170308 12.703400487132294 16.21099466759011 13.336461244475633 15.93088150634447 13.950763366714277 L 15.855294794924424 14.105511311967982 C 15.548505120186032 14.715123775430452 15.09054016173674 15.198124283685347 14.51252949691696 15.521688169215821 C 13.930071350861947 15.84994073221701 13.369844097935264 15.981243327506217 12.324977233937345 15.999999999999998 L 4.259498392123035 15.999999999999998 C 3.0323357388189995 15.999999999999998 2.427647164853361 15.87807672226314 1.796280449133012 15.521688169215821 C 1.2182696680088059 15.198124283685347 0.7603064541258975 14.715123775430452 0.4535160815609526 14.105511311967982 C 0.14227979787052092 13.491209189729338 0.017783824410355593 12.90034947353882 0 11.798356202963651 L 0 4.201641834425434 C 0.017783824410355593 3.099648809176629 0.14227979787052092 2.508791546249754 0.4535160815609526 1.8944886880320169 C 0.7603064541258975 1.2848761019063635 1.2182696680088059 0.8018749803355585 1.796280449133012 0.4783113401314495 C 2.378738362579174 0.15005871579866825 2.9389649176793045 0.018756126259298556 3.9838317816772233 0 L 12.324977233937345 0 Z M 12.049313414797746 1.5943716244242265 L 4.037185739098131 1.5990622645058563 C 3.205739589569718 1.6084402327632008 2.863378206259259 1.688159525430868 2.512125814828806 1.8851108424378544 C 2.196442573273057 2.06330610026697 1.9563460431373538 2.316530010682123 1.7873882779687615 2.649472723112215 C 1.6139846598268952 2.987104603665752 1.538398646233403 3.320046580116752 1.5161677531050743 4.051583547947903 L 1.5117207370875443 4.4923800711336055 L 1.5117207370875443 11.50762091017185 L 1.5161677531050743 11.948415470746639 C 1.538398646233403 12.679952193251426 1.6139846598268952 13.012896377639702 1.7873882779687615 13.35052825819324 C 1.9563460431373538 13.68347146127606 2.196442573273057 13.9366934090803 2.512125814828806 14.114888666909415 C 2.7966852942654223 14.274325289633836 3.076797292466806 14.358734241077679 3.62368535821171 14.39155988989998 L 3.841552390872192 14.400939207452327 L 4.259498392123035 14.405627884923044 L 12.049313414797746 14.405627884923044 L 12.467257555177781 14.400939207452327 C 13.160872027745247 14.377492876182371 13.476556664954103 14.297772602209248 13.796685992091977 14.114888666909415 C 14.112368768430024 13.9366934090803 14.352464833348023 13.68347146127606 14.521422598516615 13.35052825819324 C 14.672594160485897 13.050410703932721 14.75262742270577 12.754984771059288 14.783751417433754 12.178195993808206 L 14.7926426581626 11.948415470746639 L 14.797090139397833 11.50762091017185 L 14.797090139397833 4.4923800711336055 L 14.7926426581626 4.051583547947903 C 14.770411765034272 3.320046580116752 14.694826914485036 2.987104603665752 14.521422598516615 2.649472723112215 C 14.352464833348023 2.316530010682123 14.112368768430024 2.06330610026697 13.796685992091977 1.8851108424378544 C 13.476556664954103 1.7022266618116577 13.160872027745247 1.622508595775811 12.467257555177781 1.5990622645058563 L 12.049313414797746 1.5943716244242265 Z M 20.26596614466985 2.902695652221911 L 20.225949978777614 2.935521301044213 L 16.30881134170308 6.898007220077558 L 16.30881134170308 9.10199277992244 L 20.225949978777614 13.064479680261242 C 20.257073043070193 13.097305329083543 20.292643588598008 13.11137234280115 20.33265975449024 13.11137234280115 C 20.39935336431063 13.11137234280115 20.457155733402175 13.064479680261242 20.479385696095097 12.998828382616638 L 20.488278797694754 12.947245079995099 L 20.488278797694754 3.0527539386994427 C 20.488278797694754 3.0105501989566146 20.470492594495443 2.9683467045401506 20.443815150567286 2.9402099785149303 C 20.399353364310628 2.8886281478515756 20.323766652890587 2.8745601528285114 20.26596614466985 2.902695652221911 Z" />
 +</vector>
 diff --git a/TMessagesProj/src/main/res/drawable/camera_select_front.xml b/TMessagesProj/src/main/res/drawable/camera_select_front.xml
 new file mode 100644
-index 0000000..4356004
 --- /dev/null
 +++ b/TMessagesProj/src/main/res/drawable/camera_select_front.xml
 @@ -0,0 +1,3 @@
 +<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="20dp" android:height="22dp" android:viewportWidth="20" android:viewportHeight="22">
 +    <path android:fillColor="#FF000000" android:fillType="nonZero" android:pathData="M 9.99905757097967 9.87368281719372 C 7.251304748021788 9.87368281719372 5.02339976884403 7.663157750344583 5.02339976884403 4.93684140859686 C 5.02339976884403 2.210525066849136 7.251304748021788 0 9.99905757097967 0 C 12.74680983891457 0 14.974714263069348 2.210525066849136 14.974714263069348 4.93684140859686 C 14.974714263069348 7.663157750344583 12.74680983891457 9.87368281719372 9.99905757097967 9.87368281719372 Z M 9.99905757097967 8.084211088075453 C 11.749554538556115 8.084211088075453 13.171171529185994 6.673682847231525 13.171171529185994 4.93684140859686 C 13.171171529185994 3.199999969962194 11.749554538556115 1.789472830504473 9.99905757097967 1.789472830504473 C 8.248559493357263 1.789472830504473 6.826941392681423 3.199999969962194 6.826941392681423 4.93684140859686 C 6.826941392681423 6.673682847231525 8.248559493357263 8.084211088075453 9.99905757097967 8.084211088075453 Z M 9.99905757097967 12.126316081420075 C 15.197506037539979 12.126316081420075 18.56058342239602 14.16315805072264 19.86019637157057 18.19473819749537 C 20.353516336990417 19.731579465915804 19.499490266895013 21.373681315303443 17.9558692348098 21.863154966841268 C 17.664119185190746 21.952629379336834 17.361759316282733 22 17.05940055742068 22 L 2.938713474492698 22 C 1.3155250417488287 22 0 20.694733992202586 0 19.08420778391684 C 0 18.784207803942042 0.04773971192753264 18.48421112812586 0.1379165502968485 18.19473819749537 C 1.4375285281811807 14.16315805072264 4.8006079943734 12.126316081420075 9.99905757097967 12.126316081420075 Z M 9.99905757097967 13.915786709152139 C 5.532635018220295 13.915786709152139 2.8962772499632576 15.510523444807635 1.8565873901443015 18.742104012109642 C 1.824760846148074 18.852628117749 1.803543843929314 18.968419052219122 1.803543843929314 19.08420778391684 C 1.803543843929314 19.70526184255504 2.312778538282599 20.210524966723117 2.938713474492698 20.210524966723117 L 17.05940055742068 20.210524966723117 C 17.176099689231535 20.210524966723117 17.292799931088346 20.18947086803451 17.40419415325472 20.157891922774002 C 18.003606761334346 19.968418251210974 18.332490068418792 19.33157692271493 18.141526641769076 18.742104012109642 C 17.10183650443863 15.510523444807635 14.465479568716063 13.915786709152139 9.99905757097967 13.915786709152139 Z" />
 +</vector>
-diff --git a/TMessagesProj/src/main/res/drawable/camera_select_main.xml b/TMessagesProj/src/main/res/drawable/camera_select_main.xml
+diff --git a/TMessagesProj/src/main/res/drawable/camera_select_chevron.xml b/TMessagesProj/src/main/res/drawable/camera_select_chevron.xml
 new file mode 100644
-index 0000000..a2d6f9f
 --- /dev/null
-+++ b/TMessagesProj/src/main/res/drawable/camera_select_main.xml
++++ b/TMessagesProj/src/main/res/drawable/camera_select_chevron.xml
 @@ -0,0 +1,3 @@
-+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="22dp" android:height="16dp" android:viewportWidth="22" android:viewportHeight="16">
-+    <path android:fillColor="#FF000000" android:fillType="nonZero" android:pathData="M 12.324977233937345 0 C 13.369844097935264 0.018756126259298556 13.930071350861947 0.15005871579866825 14.51252949691696 0.4783113401314495 C 15.09054016173674 0.8018749803355585 15.548505120186032 1.2848761019063635 15.855294794924424 1.8944886880320169 C 16.166531020462642 2.508791546249754 16.29102886024539 3.099648809176629 16.30881134170308 4.201641834425434 L 16.30881134170308 4.684641361374872 L 19.17663656397987 1.7819447278475045 C 19.843572662183774 1.1113712388325139 20.897331697345944 1.1301282793158411 21.53759035162169 1.8335275398163153 C 21.795473550174407 2.1195764857378596 21.955538213743345 2.4900343831032448 21.991106898400346 2.8792493209519567 L 22 3.0527539386994427 L 22 12.947245079995099 C 22 13.922625414057237 21.25303157001163 14.710435097959735 20.33265975449024 14.710435097959735 C 19.95472991913163 14.710435097959735 19.594582565230713 14.574443825199811 19.301132542891803 14.330599232337006 L 19.17663656397987 14.218055272152494 L 16.30881134170308 11.31535765731967 L 16.30881134170308 11.50762091017185 C 16.30881134170308 12.703400487132294 16.21099466759011 13.336461244475633 15.93088150634447 13.950763366714277 L 15.855294794924424 14.105511311967982 C 15.548505120186032 14.715123775430452 15.09054016173674 15.198124283685347 14.51252949691696 15.521688169215821 C 13.930071350861947 15.84994073221701 13.369844097935264 15.981243327506217 12.324977233937345 15.999999999999998 L 4.259498392123035 15.999999999999998 C 3.0323357388189995 15.999999999999998 2.427647164853361 15.87807672226314 1.796280449133012 15.521688169215821 C 1.2182696680088059 15.198124283685347 0.7603064541258975 14.715123775430452 0.4535160815609526 14.105511311967982 C 0.14227979787052092 13.491209189729338 0.017783824410355593 12.90034947353882 0 11.798356202963651 L 0 4.201641834425434 C 0.017783824410355593 3.099648809176629 0.14227979787052092 2.508791546249754 0.4535160815609526 1.8944886880320169 C 0.7603064541258975 1.2848761019063635 1.2182696680088059 0.8018749803355585 1.796280449133012 0.4783113401314495 C 2.378738362579174 0.15005871579866825 2.9389649176793045 0.018756126259298556 3.9838317816772233 0 L 12.324977233937345 0 Z M 12.049313414797746 1.5943716244242265 L 4.037185739098131 1.5990622645058563 C 3.205739589569718 1.6084402327632008 2.863378206259259 1.688159525430868 2.512125814828806 1.8851108424378544 C 2.196442573273057 2.06330610026697 1.9563460431373538 2.316530010682123 1.7873882779687615 2.649472723112215 C 1.6139846598268952 2.987104603665752 1.538398646233403 3.320046580116752 1.5161677531050743 4.051583547947903 L 1.5117207370875443 4.4923800711336055 L 1.5117207370875443 11.50762091017185 L 1.5161677531050743 11.948415470746639 C 1.538398646233403 12.679952193251426 1.6139846598268952 13.012896377639702 1.7873882779687615 13.35052825819324 C 1.9563460431373538 13.68347146127606 2.196442573273057 13.9366934090803 2.512125814828806 14.114888666909415 C 2.7966852942654223 14.274325289633836 3.076797292466806 14.358734241077679 3.62368535821171 14.39155988989998 L 3.841552390872192 14.400939207452327 L 4.259498392123035 14.405627884923044 L 12.049313414797746 14.405627884923044 L 12.467257555177781 14.400939207452327 C 13.160872027745247 14.377492876182371 13.476556664954103 14.297772602209248 13.796685992091977 14.114888666909415 C 14.112368768430024 13.9366934090803 14.352464833348023 13.68347146127606 14.521422598516615 13.35052825819324 C 14.672594160485897 13.050410703932721 14.75262742270577 12.754984771059288 14.783751417433754 12.178195993808206 L 14.7926426581626 11.948415470746639 L 14.797090139397833 11.50762091017185 L 14.797090139397833 4.4923800711336055 L 14.7926426581626 4.051583547947903 C 14.770411765034272 3.320046580116752 14.694826914485036 2.987104603665752 14.521422598516615 2.649472723112215 C 14.352464833348023 2.316530010682123 14.112368768430024 2.06330610026697 13.796685992091977 1.8851108424378544 C 13.476556664954103 1.7022266618116577 13.160872027745247 1.622508595775811 12.467257555177781 1.5990622645058563 L 12.049313414797746 1.5943716244242265 Z M 20.26596614466985 2.902695652221911 L 20.225949978777614 2.935521301044213 L 16.30881134170308 6.898007220077558 L 16.30881134170308 9.10199277992244 L 20.225949978777614 13.064479680261242 C 20.257073043070193 13.097305329083543 20.292643588598008 13.11137234280115 20.33265975449024 13.11137234280115 C 20.39935336431063 13.11137234280115 20.457155733402175 13.064479680261242 20.479385696095097 12.998828382616638 L 20.488278797694754 12.947245079995099 L 20.488278797694754 3.0527539386994427 C 20.488278797694754 3.0105501989566146 20.470492594495443 2.9683467045401506 20.443815150567286 2.9402099785149303 C 20.399353364310628 2.8886281478515756 20.323766652890587 2.8745601528285114 20.26596614466985 2.902695652221911 Z" />
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="18dp" android:height="8dp" android:viewportWidth="18" android:viewportHeight="8">
++    <path android:fillColor="#FF000000" android:fillType="evenOdd" android:pathData="M 8.275541497433489 0.23947694115271884 C 8.675648831699363 -0.07982565547984571 9.324352161382937 -0.07982565547984571 9.72445949564881 0.23947694115271884 L 17.699920321696872 6.604226297198605 C 18.100028245605362 6.923528615676169 18.100028245605362 7.441220588648808 17.699920321696872 7.760522907126372 C 17.299812397788383 8.079825680766664 16.651109254307745 8.079825680766664 16.251001330399255 7.760522907126372 L 9 1.9739224123543708 L 1.7489989178713214 7.760522907126372 C 1.348891211199585 8.079825680766664 0.7001885021924499 8.079825680766664 0.3000807955207133 7.760522907126372 C -0.10002691115102325 7.441220588648808 -0.10002691115102325 6.923528615676169 0.3000807955207133 6.604226297198605 L 8.275541497433489 0.23947694115271884 Z" />
 +</vector>

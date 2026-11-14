@@ -1,0 +1,4 @@
+# Obtain your own values from https://my.telegram.org/apps
+# Copy next to the Telegram source directory as api.properties. Do not commit it.
+api_id=
+api_hash=

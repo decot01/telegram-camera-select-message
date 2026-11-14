@@ -8,3 +8,9 @@ out/
 __pycache__/
 *.pyc
 *.log
+/work/
+api.properties
+*.apk
+*.class
+*.keystore
+*.jks
