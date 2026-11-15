@@ -1,114 +1,91 @@
-# Camera Select: выбор камеры перед записью кружка
+# Camera Select: choose your camera before recording a video note
 
-Изменение Telegram Android: выбрать фронтальную или основную камеру одним свайпом до начала записи.
+Your face or the world around you? Choose before the video starts.
 
-## Управление
+A gesture for **Telegram Android** that lets you select the front or rear camera before recording a round video message. Pull up from the video message button, choose a camera, and let go to start recording.
 
-1. Переключиться на кнопку видеосообщения и потянуть её вверх.
-2. Короткий свайп и отпускание — фронтальная камера; длинный — основная.
-3. Пока палец на экране, выбор можно менять слайдом в обе стороны. Удержание само по себе запись не запускает.
-4. После отпускания начинается штатная закреплённая запись кружка. Бар записи, таймер, пауза, отмена и отправка остаются оригинальными.
+## Demo
 
-Возврат к кнопке до отпускания отменяет выбор. Сдвиг влево отменяет жест. Короткое нажатие без свайпа сохраняет переключение между голосовыми и видеосообщениями.
-
-## Внешний вид
-
-[Исходный макет Figma](https://www.figma.com/design/VXU4prxOmPjdPvxV4PSaf4/telegram-camera-select-message?node-id=5-448).
-
-- Сохранены две отдельные формы концепта: верхняя капсула с камерой и шевроном, нижний круг с человеком. Контуры значков взяты из Figma.
-- Фон использует штатный движок стекла Telegram, цвета, тонировку, тени и режим энергосбережения клиента. Подкрашенные растровые имитации стекла не используются.
-- Появление и смена выбранной камеры выполняются переиспользуемыми `SpringAnimation`. Таймеров удержания и постоянного опроса жеста нет.
-- Нижняя граница круга располагается на **80 физических пикселей** выше верхней границы контейнера поля ввода. Это не 80 dp.
-- Позиция корректируется после размещения родителем: учитывается дополнительное смещение шапки чата и системных отступов. Граница длинного свайпа соответствует фактическому положению элементов.
-
-### Ранний прототип
-
-Эти скриншоты показывают ранний автономный прототип, **не итоговый APK v6**. Нижняя панель макета служит ориентиром; отдельный бар записи поверх оригинального не добавляется.
-
-<p>
-<img src="screenshots/01-chat.png" width="230" alt="Ранний прототип: чат" />
-<img src="screenshots/02-camera-choice.png" width="230" alt="Ранний прототип: выбор камеры" />
-<img src="screenshots/03-recording.png" width="230" alt="Ранний прототип: запись" />
+<p align="center">
+  <a href="https://github.com/decot01/telegram-camera-select-message/raw/refs/heads/main/media/demo.mp4">
+    <img src="media/demo.gif" width="560" alt="Camera Select demo: a short upward slide selects the front camera; a longer slide selects the rear camera" />
+  </a>
 </p>
 
-## Применение патча
+<p align="center">
+  <a href="https://github.com/decot01/telegram-camera-select-message/raw/refs/heads/main/media/demo.mp4">Watch or download the full demo</a> · MP4 · 1080 × 1080 · 60 fps
+</p>
 
-`changes.patch` содержит итоговую реализацию v6 относительно официального [Telegram Android на коммите `7be672ead283d022812d75c729d3a04dd4c2a2c6`](https://github.com/DrKLO/Telegram/tree/7be672ead283d022812d75c729d3a04dd4c2a2c6), версия **13.2.1 (7291)**. Патч нужно применять к чистой копии этого коммита, а не поверх старой версии `changes.patch`.
+The demo was captured from the Android build. The scenes inside the video notes were replaced for privacy; the grey touch indicator illustrates the slide gestures.
 
-Из папки с исходниками Telegram:
+## Why
+
+Sometimes you want to record yourself. Sometimes you want to show what is in front of you. Picking the camera first means the video starts with the view you intended, without switching cameras during the recording or starting over.
+
+## What it does
+
+### 1. Pull up to choose
+
+Start with the video message button, then slide upward:
+
+- **Short slide + release:** record with the front camera.
+- **Longer slide + release:** record with the rear camera.
+
+The two choices appear above the input bar, within reach of the same finger.
+
+### 2. Change your mind before letting go
+
+Keep your finger on the screen and slide between the choices. Holding does not start a recording: the camera is confirmed only when you release.
+
+Slide back to the button to dismiss the selection, or move left to cancel the gesture. A quick tap still switches between voice and video messages.
+
+### 3. Continue with Telegram's recording controls
+
+Releasing starts the normal locked video-note recording with the selected camera. The recording bar, timer, pause, cancel and send controls use Telegram's existing behaviour.
+
+<p align="center">
+  <img src="media/01-camera-choice.png" width="235" alt="Choosing a camera with an upward slide" />
+  <img src="media/02-front-camera.png" width="235" alt="Front camera selected: the first demo scene" />
+  <img src="media/03-rear-camera.png" width="235" alt="Rear camera selected: a different demo scene" />
+</p>
+
+<p align="center"><em>Choose a camera → release to record. Different demo scenes distinguish the two cameras.</em></p>
+
+## How it fits into Telegram
+
+The selector uses Telegram's native glass background, theme colours, tinting and shadows. Its two shapes follow the [original Figma concept](https://www.figma.com/design/VXU4prxOmPjdPvxV4PSaf4/telegram-camera-select-message?node-id=5-448): a camera capsule above and a front-camera circle below. Reusable spring animations handle appearance and selection changes.
+
+The camera direction is passed to the recorder before the camera session opens. Both `InstantCameraView` and `InstantCameraView2` are supported. This is a client-side change; it does not require a new server feature or a modified client on the receiving side.
+
+## Applying the change
+
+[`changes.patch`](changes.patch) contains the implementation against official **Telegram Android 13.2.1 (7291)** at commit [`7be672ead283d022812d75c729d3a04dd4c2a2c6`](https://github.com/DrKLO/Telegram/tree/7be672ead283d022812d75c729d3a04dd4c2a2c6).
+
+From a clean checkout of that commit:
 
 ```sh
 git apply --check /path/to/telegram-camera-select-message/changes.patch
 git apply /path/to/telegram-camera-select-message/changes.patch
 ```
 
-Новые классы находятся в `TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/`. Патч включает общий контракт выбора камеры и поддержку обоих рекордеров: `InstantCameraView` и `InstantCameraView2`. Направление камеры передаётся до открытия записи.
+Then follow the [build and API setup](docs/BUILD.md). This repository contains a patch, rather than a full copy of Telegram. Apply it to the pinned base, not on top of an earlier version of the patch.
 
-## API и сборка
+The new gesture, placement and selector code lives in `TMessagesProj/src/main/java/org/telegram/ui/Components/cameraselect/`. The patch also includes the chat integration, recorder hooks and local API configuration.
 
-Для входа нужны собственные `api_id` и `api_hash` из [my.telegram.org/apps](https://my.telegram.org/apps). Демонстрационные параметры исходного Telegram ограничены сервером и могут возвращать `API_ID_PUBLISHED_FLOOD`; см. [требования Telegram к API ID](https://core.telegram.org/api/obtaining_api_id).
-
-Для входа в обычный аккаунт оставьте «Тестовый сервер» выключенным: это отдельная среда с отдельными аккаунтами и чатами.
-
-Скопируйте `api.properties.example` в файл `api.properties` **рядом с папкой исходников Telegram** и заполните его локально:
-
-```text
-TelegramBuild/
-  api.properties           # приватный файл с api_id и api_hash
-  Telegram/                # исходники Telegram с применённым патчем
-```
-
-Gradle читает этот файл и формирует `BuildConfig.CLIENT_API_ID` / `CLIENT_API_HASH`. При отсутствии или неверном формате параметров сборка останавливается. Личные значения API не входят в этот репозиторий.
-
-Остальная настройка SDK, NDK, подписи и локальных файлов выполняется по README исходного Telegram. Проверенная конфигурация: JDK 17, Gradle 8.13, Android SDK / Build Tools 36, NDK 27.2.12479018 и CMake 3.22.1. На Windows используйте путь к сборке без кириллицы: CMake/Ninja могут не обработать её корректно.
-
-Основная задача сборки:
-
-```sh
-./gradlew :TMessagesProj_App:assembleAfatDebug
-```
-
-Если в исходниках нет `gradlew.bat`, на Windows можно запустить wrapper из PowerShell, находясь в папке Telegram:
-
-```powershell
-& "$env:JAVA_HOME/bin/java.exe" -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain :TMessagesProj_App:assembleAfatDebug
-```
-
-Результат: `TMessagesProj_App/build/outputs/apk/afat/debug/app.apk`, пакет `org.telegram.messenger.beta`. Он устанавливается отдельно от обычного Telegram. В сборку входят ARM 32/64 и x86 32/64. Внутренние `DEBUG_VERSION` и `DEBUG_PRIVATE_VERSION` отключены, чтобы не запускать тяжёлые отладочные проверки при использовании.
-
-### Необязательное ускорение через готовые нативные библиотеки
-
-Java-код и ресурсы концепта можно пересобрать без повторной компиляции C++. Для этого нужны библиотеки из APK **той же версии 13.2.1 (7291)**. Использованный при проверке APK имел действительную подпись Telegram.
-
-Поместите `lib/<abi>/libtmessages.49.so` из такого APK в соседнюю с исходниками папку `prebuilt-native/<abi>/libtmessages.49.so` для всех четырёх архитектур:
-
-```text
-TelegramBuild/
-  api.properties
-  prebuilt-native/
-    arm64-v8a/libtmessages.49.so
-    armeabi-v7a/libtmessages.49.so
-    x86/libtmessages.49.so
-    x86_64/libtmessages.49.so
-  Telegram/
-```
-
-Затем добавьте `-PusePrebuiltNative=true` к задаче Gradle. Без этого параметра выполняется обычная сборка C++ из исходников. Нативные библиотеки, APK и личные параметры API в репозиторий не включены.
-
-## Проверки
+## Checks and limitations
 
 ```sh
 python tools/test_gesture.py
 ```
 
-Нужны Python 3 и JDK с `java` / `javac` в `PATH` либо настроенным `JAVA_HOME`. Скрипт извлекает настоящие классы из патча и запускает проверки без клонирования Telegram:
+The script extracts the actual classes from the patch and runs 19 gesture checks, 384 placement checks, and a repeatability check over one million gesture sequences. It requires Python 3 and a JDK. These are state and geometry checks, not an FPS benchmark.
 
-- 19 проверок жеста: быстрые свайпы, смена камеры до отпускания, отмена и отсутствие самопроизвольной записи;
-- 384 проверки отступа и выбора на восьми плотностях и шести положениях бара, включая смещение родителем на высоту шапки;
-- проверка повторяемости состояния на миллионе последовательностей жеста; это не замер FPS приложения.
+- The implementation was built and manually tried on Android. Camera behaviour and animation smoothness do not have automated device tests.
+- The patch targets the pinned Telegram version. Newer versions may need adaptation.
+- Building requires your own Telegram API credentials. APKs, signing keys and private API settings are not included in this repository.
 
-APK v6 собран, проверены его подпись, выравнивание, наличие четырёх архитектур и итогового кода. Пользователь подтвердил, что отступ исправлен и функция работает нормально. Штатные методы отрисовки бара и перехода в закреплённую запись сверены с исходным Telegram. Автоматических проверок камеры на устройстве и замеров плавности на S21 не проводилось.
+## Design and source
 
-Патч рассчитан на закреплённый коммит; другим версиям может понадобиться адаптация. Установленный официальный APK нельзя изменить одним применением патча — нужен собранный клиент.
+Concept and Android implementation by [@decot01](https://github.com/decot01). [Figma](https://www.figma.com/design/VXU4prxOmPjdPvxV4PSaf4/telegram-camera-select-message?node-id=5-448) · [Patch](changes.patch) · [Build instructions](docs/BUILD.md)
 
-Код распространяется по GNU GPL v2 или более поздней версии, как [исходный Telegram Android](https://github.com/DrKLO/Telegram/blob/7be672ead283d022812d75c729d3a04dd4c2a2c6/LICENSE).
+Code follows Telegram Android's [GNU GPL v2 or later license](https://github.com/DrKLO/Telegram/blob/7be672ead283d022812d75c729d3a04dd4c2a2c6/LICENSE).
