@@ -16,7 +16,7 @@ A gesture for **Telegram Android** that lets you select the front or rear camera
   <a href="https://github.com/decot01/telegram-camera-select-message/raw/refs/heads/main/media/demo.mp4">Watch or download the full demo</a> · MP4 · 1080 × 1080 · 60 fps
 </p>
 
-The demo was captured from the Android build. The scenes inside the video notes were replaced for privacy; the grey touch indicator illustrates the slide gestures.
+The demo was captured from the Android build. The scenes inside the video notes were replaced for privacy. Demo footage: *Big Buck Bunny*, © 2008 Blender Foundation / [bigbuckbunny.org](https://www.bigbuckbunny.org/), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/); cropped, retimed and used without audio.
 
 ## Why
 
